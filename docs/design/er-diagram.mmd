@@ -1,0 +1,154 @@
+erDiagram
+    %% 11 tables. Money columns are DECIMAL (scale 2, EGP), never floating point.
+    %% Wallets has NO balance columns. Balances are derived from LedgerEntries:
+    %%   available_balance = SUM(LedgerEntries.amount) WHERE wallet_id = W AND bucket = 'AVAILABLE'
+    %%   held_balance      = SUM(LedgerEntries.amount) WHERE wallet_id = W AND bucket = 'HELD'
+    %% Every ledger transaction (same transaction_id) sums to 0.00.
+    %% Idempotency: UNIQUE (customer_id, idempotency_key) on Payments.
+
+    Users ||--o{ Payments : "pays as customer"
+    Users |o--o{ Payments : "assists as agent"
+    Users |o--o{ Wallets : "owns"
+    Users ||--o{ Notifications : "receives"
+    Users |o--o{ AuditLogs : "acts in"
+    Users |o--o{ SystemConfig : "last edited by"
+    Wallets ||--o{ LedgerEntries : "balances derived by SUM"
+    Wallets ||--o{ Payments : "funds"
+    Billers ||--o{ BillerServices : "offers"
+    Billers ||--o{ ReconciliationEntries : "settles"
+    BillerServices ||--o{ Payments : "is paid by"
+    Payments ||--o{ PaymentEvents : "has history"
+    Payments |o--o{ LedgerEntries : "posts"
+    Payments ||--o{ Notifications : "triggers"
+    Payments |o--o{ ReconciliationEntries : "matched to"
+
+    Users {
+        uuid id PK
+        string full_name
+        string phone UK
+        string email UK
+        string password_hash
+        string role "CUSTOMER, AGENT, SUPPORT or ADMIN"
+        string verification_level "BASIC or VERIFIED"
+        string status "ACTIVE or BLOCKED"
+        timestamp blocked_until "velocity block, nullable"
+        timestamp created_at
+    }
+
+    Wallets {
+        uuid id PK
+        uuid owner_user_id FK "null for system wallets"
+        string wallet_type "CUSTOMER, AGENT, SYSTEM_FEE_INCOME, SYSTEM_BILLER_PAYABLE or SYSTEM_EXTERNAL"
+        string currency "EGP"
+        timestamp created_at
+    }
+
+    LedgerEntries {
+        uuid id PK
+        uuid transaction_id "groups entries that sum to 0.00"
+        uuid wallet_id FK
+        uuid payment_id FK "nullable"
+        string bucket "AVAILABLE or HELD"
+        string entry_type "TOPUP, HOLD, RELEASE, CHARGE, FEE, COMMISSION or REFUND"
+        DECIMAL amount "signed, EGP, scale 2"
+        uuid actor_user_id "who, null means SYSTEM"
+        string reason "why"
+        timestamp created_at "when"
+    }
+
+    Billers {
+        uuid id PK
+        string name UK
+        string service_type "ELECTRICITY, WATER, MOBILE or INTERNET"
+        string protocol "REST_JSON, SOAP_XML, ASYNC_JSON or BATCH_CSV"
+        string adapter_key "selects the adapter in Biller Integration"
+        boolean is_active
+        timestamp created_at
+    }
+
+    BillerServices {
+        uuid id PK
+        uuid biller_id FK
+        string name
+        json required_fields "for example meter number or phone number"
+        DECIMAL min_amount "EGP, at least 5.00"
+        DECIMAL max_amount "EGP, at most 10000.00"
+        boolean is_active
+    }
+
+    Payments {
+        uuid id PK
+        string reference UK "unique reference sent to the biller"
+        string idempotency_key "unique together with customer_id"
+        uuid customer_id FK
+        uuid agent_id FK "nullable"
+        uuid wallet_id FK "customer wallet"
+        uuid service_id FK
+        string state "Initiated, FundsHeld, SentToBiller, Completed, Failed, Unknown, Rejected or Refunded"
+        DECIMAL amount "EGP bill amount"
+        DECIMAL fee "EGP service fee"
+        DECIMAL total "amount plus fee"
+        DECIMAL commission "EGP, set when Completed with an agent"
+        json input_fields "meter number, phone number, etc."
+        string biller_reference "nullable"
+        string failure_reason "nullable"
+        timestamp unknown_since "nullable, starts the retry clock"
+        int query_attempts "0 to 3 re-queries"
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    PaymentEvents {
+        uuid id PK
+        uuid payment_id FK
+        string event_type "TRANSITION, CALLBACK, DUPLICATE_CALLBACK, CONFLICTING_CALLBACK, REFUND_REQUESTED, REFUND_APPROVED or REFUND_REJECTED"
+        string from_state "nullable"
+        string to_state "nullable"
+        string cause
+        json details
+        timestamp created_at
+    }
+
+    Notifications {
+        uuid id PK
+        uuid payment_id FK
+        uuid user_id FK
+        string channel "SMS, EMAIL or PUSH"
+        string template
+        string status "PENDING, DELIVERED or UNDELIVERED"
+        int attempts "first send plus up to 3 retries"
+        timestamp next_retry_at "nullable"
+        timestamp created_at
+    }
+
+    ReconciliationEntries {
+        uuid id PK
+        date report_date
+        uuid biller_id FK
+        uuid payment_id FK "nullable"
+        string biller_reference
+        DECIMAL biller_amount "nullable, EGP"
+        string difference_type "MATCHED, MISSING_IN_PAYLINK, MISSING_AT_BILLER, AMOUNT_MISMATCH or STATUS_MISMATCH"
+        string review_status "OPEN or REVIEWED"
+        timestamp created_at
+    }
+
+    AuditLogs {
+        uuid id PK
+        uuid actor_user_id FK "who, null means SYSTEM"
+        string action
+        string entity_type
+        uuid entity_id
+        json old_value
+        json new_value
+        string reason "why"
+        timestamp created_at "when"
+    }
+
+    SystemConfig {
+        string config_key PK
+        string config_value "decimal or text"
+        string value_type
+        uuid updated_by FK
+        timestamp updated_at
+    }

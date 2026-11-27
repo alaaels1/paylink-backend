@@ -1,0 +1,68 @@
+flowchart LR
+    %% Actors
+    Customer(["Customer"])
+    Agent(["Agent"])
+    Support(["Support Employee"])
+    Admin(["Admin"])
+
+    %% System boundary and use cases
+    subgraph SYS ["PayLink Backend System"]
+        UC01(["Register account (FR-1)"])
+        UC02(["View wallet balance and history (FR-3)"])
+        UC03(["Top up wallet by simulated card (FR-4)"])
+        UC04(["List billers and input fields (FR-7)"])
+        UC05(["Run bill inquiry (FR-8)"])
+        UC06(["Pay a bill from wallet (FR-9, FR-10)"])
+        UC07(["Calculate fee and total (FR-16)"])
+        UC08(["Run fraud checks (FR-18, FR-19)"])
+        UC09(["Hold funds and call biller (FR-12)"])
+        UC10(["Receive SMS and push message (FR-22)"])
+        UC11(["Request refund of completed payment (FR-27)"])
+        UC12(["Record cash top-up for customer (FR-4)"])
+        UC13(["Pay on behalf of customer and earn commission (FR-17)"])
+        UC14(["Search payment by reference and view history (FR-20)"])
+        UC15(["Block or unblock account (FR-21)"])
+        UC16(["Approve or reject refund (FR-27)"])
+        UC17(["Review reconciliation report (FR-26)"])
+        UC18(["Add, edit and disable billers and services (FR-6)"])
+        UC19(["Edit fee and limit values (FR-24)"])
+        UC20(["Upgrade customer to verified (FR-2)"])
+        UC21(["View daily totals (FR-28)"])
+        UC22(["View audit log (FR-25)"])
+    end
+
+    %% Customer
+    Customer --> UC01
+    Customer --> UC02
+    Customer --> UC03
+    Customer --> UC04
+    Customer --> UC05
+    Customer --> UC06
+    Customer --> UC11
+    Customer --- UC10
+
+    %% Agent
+    Agent --> UC02
+    Agent --> UC12
+    Agent --> UC13
+
+    %% Support
+    Support --> UC14
+    Support --> UC15
+    Support --> UC16
+    Support --> UC17
+
+    %% Admin
+    Admin --> UC18
+    Admin --> UC19
+    Admin --> UC20
+    Admin --> UC21
+    Admin --> UC22
+
+    %% Include and extend relationships
+    UC05 -.->|include| UC07
+    UC06 -.->|include| UC05
+    UC06 -.->|include| UC08
+    UC06 -.->|include| UC09
+    UC13 -.->|include| UC06
+    UC10 -.->|extend| UC06

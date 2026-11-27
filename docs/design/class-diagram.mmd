@@ -1,0 +1,257 @@
+classDiagram
+    direction TB
+
+    %% ---------- Value object and enumerations ----------
+    class Money {
+        <<valueObject>>
+        -Decimal amount
+        -String currency
+        +add(other Money) Money
+        +subtract(other Money) Money
+        +multiply(factor Decimal) Money
+        +roundHalfUp() Money
+    }
+
+    class VerificationLevel {
+        <<enumeration>>
+        BASIC
+        VERIFIED
+    }
+
+    class AccountStatus {
+        <<enumeration>>
+        ACTIVE
+        BLOCKED
+    }
+
+    class WalletType {
+        <<enumeration>>
+        CUSTOMER
+        AGENT
+        SYSTEM_FEE_INCOME
+        SYSTEM_BILLER_PAYABLE
+        SYSTEM_EXTERNAL
+    }
+
+    class BalanceBucket {
+        <<enumeration>>
+        AVAILABLE
+        HELD
+    }
+
+    class PaymentState {
+        <<enumeration>>
+        Initiated
+        FundsHeld
+        SentToBiller
+        Completed
+        Failed
+        Unknown
+        Rejected
+        Refunded
+    }
+
+    %% ---------- Accounts and Wallet ----------
+    class User {
+        <<abstract>>
+        +UUID id
+        +String fullName
+        +String phone
+        +String email
+        +VerificationLevel verificationLevel
+        +AccountStatus status
+        +DateTime blockedUntil
+        +isBlocked(now DateTime) Boolean
+    }
+
+    class Customer {
+        +dailyLimit() Money
+    }
+
+    class Agent {
+        +recordCashTopUp(customer Customer, amount Money) void
+    }
+
+    class SupportEmployee {
+        +blockAccount(user User, reason String) void
+        +unblockAccount(user User, reason String) void
+        +approveRefund(paymentId UUID) void
+    }
+
+    class Admin {
+        +upgradeCustomer(customer Customer, reason String) void
+        +updateConfig(key String, value String) void
+    }
+
+    class Wallet {
+        +UUID id
+        +WalletType walletType
+        +String currency
+        +availableBalance() Money
+        +heldBalance() Money
+        +hold(amount Money, payment Payment) List~LedgerEntry~
+        +release(amount Money, payment Payment) List~LedgerEntry~
+        +capture(payment Payment) List~LedgerEntry~
+    }
+
+    class LedgerEntry {
+        +UUID id
+        +UUID transactionId
+        +BalanceBucket bucket
+        +String entryType
+        +Money amount
+        +UUID actorId
+        +String reason
+        +DateTime createdAt
+    }
+
+    %% ---------- Biller Catalog ----------
+    class Biller {
+        +UUID id
+        +String name
+        +String serviceType
+        +String adapterKey
+        +Boolean isActive
+    }
+
+    class BillerService {
+        +UUID id
+        +String name
+        +List~String~ requiredFields
+        +Money minAmount
+        +Money maxAmount
+        +Boolean isActive
+    }
+
+    %% ---------- Payment Processing ----------
+    class Payment {
+        +UUID id
+        +String reference
+        +String idempotencyKey
+        +PaymentState state
+        +Money amount
+        +Money fee
+        +Money total
+        +Money commission
+        +String billerReference
+        +DateTime unknownSince
+        +canTransitionTo(next PaymentState) Boolean
+        +transitionTo(next PaymentState, cause String) PaymentEvent
+    }
+
+    class PaymentEvent {
+        +UUID id
+        +String eventType
+        +PaymentState fromState
+        +PaymentState toState
+        +String cause
+        +DateTime createdAt
+    }
+
+    %% ---------- Fees and Commissions (Strategy) ----------
+    class FeeStrategy {
+        <<interface>>
+        +calculate(amount Money) Money
+    }
+
+    class FixedFeeStrategy {
+        +calculate(amount Money) Money
+    }
+
+    class PercentageFeeStrategy {
+        +calculate(amount Money) Money
+    }
+
+    class TieredFeeStrategy {
+        +calculate(amount Money) Money
+    }
+
+    class PromotionFeeStrategy {
+        +calculate(amount Money) Money
+    }
+
+    %% ---------- Biller Integration (Adapter and Factory) ----------
+    class BillerAdapter {
+        <<interface>>
+        +inquire(request InquiryRequest) BillResult
+        +pay(request PaymentRequest) BillerResponse
+        +queryStatus(reference String) BillerResponse
+        +handleCallback(payload String) CallbackResult
+    }
+
+    class ElectroCoAdapter
+    class AquaCoAdapter
+    class TopUpNetAdapter
+
+    class BillerAdapterFactory {
+        +create(adapterKey String) BillerAdapter
+    }
+
+    %% ---------- Fraud Checks (Chain of Responsibility) ----------
+    class FraudRule {
+        <<interface>>
+        +check(context FraudContext) FraudResult
+    }
+
+    class BlockedAccountRule
+    class VelocityRule
+    class DailyLimitRule
+
+    %% ---------- Notifications and Reconciliation ----------
+    class Notification {
+        +UUID id
+        +String channel
+        +String template
+        +String status
+        +Integer attempts
+    }
+
+    class ReconciliationEntry {
+        +UUID id
+        +Date reportDate
+        +String billerReference
+        +String differenceType
+        +String reviewStatus
+    }
+
+    %% ---------- Relationships ----------
+    User <|-- Customer
+    User <|-- Agent
+    User <|-- SupportEmployee
+    User <|-- Admin
+    User --> VerificationLevel : level
+    User --> AccountStatus : status
+
+    User "1" --> "0..*" Wallet : owns
+    Wallet --> WalletType : type
+    Wallet "1" --> "0..*" LedgerEntry : has entries
+    LedgerEntry --> BalanceBucket : bucket
+
+    Customer "1" --> "0..*" Payment : makes
+    Agent "0..1" --> "0..*" Payment : assists
+    Biller "1" *-- "1..*" BillerService : offers
+    Payment "0..*" --> "1" BillerService : pays for
+    Payment "1" *-- "1..*" PaymentEvent : history
+    Payment --> PaymentState : state
+    Payment "1" --> "0..*" LedgerEntry : posts
+    Payment "1" --> "0..*" Notification : triggers
+    Biller "1" --> "0..*" ReconciliationEntry : settles
+    Payment "0..1" --> "0..*" ReconciliationEntry : matched to
+
+    FeeStrategy <|.. FixedFeeStrategy
+    FeeStrategy <|.. PercentageFeeStrategy
+    FeeStrategy <|.. TieredFeeStrategy
+    FeeStrategy <|.. PromotionFeeStrategy
+    PromotionFeeStrategy o-- FeeStrategy : wraps normal strategy
+    Payment ..> FeeStrategy : fee calculated by
+
+    BillerAdapter <|.. ElectroCoAdapter
+    BillerAdapter <|.. AquaCoAdapter
+    BillerAdapter <|.. TopUpNetAdapter
+    BillerAdapterFactory ..> BillerAdapter : creates
+    Biller ..> BillerAdapterFactory : adapterKey
+
+    FraudRule <|.. BlockedAccountRule
+    FraudRule <|.. VelocityRule
+    FraudRule <|.. DailyLimitRule
+    FraudRule "1" --> "0..1" FraudRule : next in chain

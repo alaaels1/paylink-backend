@@ -1,0 +1,43 @@
+sequenceDiagram
+    actor Customer
+    participant Bill as Biller mock
+    participant Int as Biller Integration
+    participant Rec as Reconciliation
+    participant Pay as Payment Processing
+    participant Acc as Accounts and Wallet
+    participant Notif as Notifications
+    participant Aud as Audit Log
+
+    Note over Pay: Payment of 352.50 EGP is held and is in state SentToBiller or Unknown
+
+    alt Trigger A - biller refuses a live payment
+        Bill-->>Int: Refusal with error code
+        Int-->>Pay: REFUSED with mapped reason
+        Pay->>Pay: SentToBiller to Failed
+    else Trigger B - Unknown payment, retry or callback says refused
+        Int-->>Pay: REFUSED from re-query or callback
+        Pay->>Pay: Unknown to Failed
+    else Trigger C - Unknown payment, settlement file does not list it
+        Rec->>Pay: Settlement file has no record of this reference
+        Pay->>Pay: Unknown to Failed
+    end
+
+    Pay->>Aud: Record transition to Failed with cause
+    Note over Pay,Acc: Only a Failed payment may be refunded. An Unknown payment is never refunded automatically.
+
+    Pay->>Acc: releaseHold(352.50, payment reference)
+    alt Hold was already released (duplicate call)
+        Acc-->>Pay: Already released, no change
+    else First release
+        Acc->>Acc: One transaction posts held -352.50 and available +352.50
+        Acc->>Aud: Record release with who, when and why
+        Acc-->>Pay: Released
+        Pay->>Pay: Failed to Refunded (final state)
+        Note over Pay,Acc: No fee income is credited and no agent commission is paid
+        Pay-)Notif: PaymentFailed event with reason and refund notice
+        Notif-)Customer: SMS with clear reason and push message
+        Note over Notif,Customer: A failed notification is retried 3 times, then marked undelivered. The payment state is not affected.
+    end
+
+    Customer->>Acc: View wallet
+    Acc-->>Customer: Available balance restored, held balance reduced by 352.50

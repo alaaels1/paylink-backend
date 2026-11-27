@@ -1,0 +1,103 @@
+sequenceDiagram
+    actor Customer
+    participant API as Payment API
+    participant Acc as Accounts and Wallet
+    participant Cat as Biller Catalog
+    participant Fee as Fees and Commissions
+    participant Fraud as Fraud Checks
+    participant Int as Biller Integration
+    participant Bill as ElectroCo mock biller
+    participant Notif as Notifications
+    participant Aud as Audit Log
+
+    Note over Customer,Aud: Step 1 - Login and limits
+    Customer->>API: Login with phone and password
+    API->>Acc: Identify user and read verification level
+    Acc-->>API: Customer Sara, level BASIC, daily limit 5000.00 EGP from configuration
+    API-->>Customer: Session token
+
+    Note over Customer,Aud: Step 2 - Bill inquiry
+    Customer->>API: Inquiry for ElectroCo with meter number
+    API->>Cat: Check service is active and meter number is valid
+    Cat-->>API: Active, min 5.00, max 10000.00
+    API->>Int: inquire(meter number)
+    Int->>Bill: Request bill for meter number
+    Bill-->>Int: Amount due 350.00 EGP
+    Int-->>API: Bill of 350.00 EGP
+
+    Note over Customer,Aud: Step 3 - Fee and total
+    API->>Fee: calculateFee(ELECTRICITY, 350.00)
+    Fee-->>API: Fee 2.50 EGP
+    API-->>Customer: Amount 350.00 + fee 2.50 = total 352.50 EGP
+
+    Customer->>API: Pay with idempotency key
+    API->>API: Look up idempotency key for this customer
+    alt Key already used by an identical request
+        API-->>Customer: Return the original result, no new payment
+    else New key
+        API->>API: Create payment in state Initiated
+        API->>Aud: Record payment created
+
+        Note over Customer,Aud: Step 4 - Fraud checks
+        API->>Fraud: Run chain (blocked account, velocity, daily limit, min and max)
+        alt A rule fails
+            Fraud-->>API: Reject with reason code
+            API->>API: Initiated to Rejected
+            API->>Aud: Record rejection and reason
+            API-->>Customer: Rejected with clear reason
+        else All rules pass
+            Fraud-->>API: Pass
+
+            Note over Customer,Aud: Step 5 - Hold the money
+            API->>Acc: holdFunds(352.50, payment reference)
+            alt Available balance is lower than 352.50
+                Acc-->>API: INSUFFICIENT_FUNDS
+                API->>API: Initiated to Rejected
+                API-->>Customer: Rejected with INSUFFICIENT_FUNDS
+            else Hold succeeds
+                Acc->>Acc: Ledger entries available -352.50 and held +352.50 (row lock)
+                Acc->>Aud: Record hold with who, when and why
+                Acc-->>API: Hold confirmed
+                API->>API: Initiated to FundsHeld
+
+                Note over Customer,Aud: Step 6 - Call the biller
+                API->>API: FundsHeld to SentToBiller
+                API->>Int: pay(unique reference, 350.00)
+                Int->>Bill: Send payment with unique reference (timeout 10 seconds)
+
+                Note over Customer,Aud: Step 7 - Confirmation
+                alt Biller confirms paid
+                    Bill-->>Int: Paid
+                    Int-->>API: PAID
+                    API->>Acc: Convert hold to final charge
+                    Acc->>Acc: Ledger entries held -352.50, fee income +2.50, biller payable +350.00
+                    opt Payment made at an agent terminal
+                        API->>Fee: calculateCommission(fee 2.50)
+                        Fee-->>API: Commission 1.00 EGP (40 percent of fee)
+                        API->>Acc: Credit agent wallet 1.00 EGP
+                    end
+                    API->>API: SentToBiller to Completed
+                    API->>Aud: Record charge, fee and commission
+                    Note over Customer,Aud: Step 8 - Receipt
+                    API-)Notif: PaymentCompleted event
+                    Notif-)Customer: SMS and push message
+                    API-->>Customer: Completed with reference
+                else Biller refuses
+                    Bill-->>Int: Refused with error code
+                    Int-->>API: REFUSED
+                    API->>API: SentToBiller to Failed
+                    Note over API,Acc: Hold is released and payment becomes Refunded (see seq-refund)
+                    API-)Notif: PaymentFailed event
+                    API-->>Customer: Failed with clear reason
+                else No answer within 10 seconds
+                    API->>API: SentToBiller to Unknown
+                    Note over API,Acc: Money stays held, never refunded automatically
+                    API-)Int: Schedule re-queries after 1, 5 and 15 minutes
+                    API-)Notif: PaymentProcessing event
+                    API-->>Customer: Payment is being processed
+                end
+            end
+        end
+    end
+
+    Note over Bill,Aud: Step 9 (night reconciliation) is a separate batch flow and is not part of this online sequence
