@@ -1,0 +1,33 @@
+stateDiagram-v2
+    [*] --> Initiated : payment created
+
+    Initiated --> FundsHeld : fraud checks pass and wallet has enough funds
+    Initiated --> Rejected : fraud check fails or funds are insufficient
+
+    FundsHeld --> SentToBiller : request sent to biller
+
+    SentToBiller --> Completed : biller confirms
+    SentToBiller --> Failed : biller refuses
+    SentToBiller --> Unknown : no answer within the timeout
+
+    Unknown --> Completed : biller later confirms (callback, retry or settlement file)
+    Unknown --> Failed : biller later refuses, or reconciliation finds no payment
+
+    Failed --> Refunded : hold released to the wallet
+
+    %% Final states
+    Completed --> [*]
+    Rejected --> [*]
+    Refunded --> [*]
+
+    note right of Unknown
+        Never refunded automatically.
+        Re-queried after 1, 5 and 15 minutes,
+        then waits for reconciliation.
+        Money stays held.
+    end note
+
+    note right of Failed
+        Not a final state.
+        Only Failed can move to Refunded.
+    end note
